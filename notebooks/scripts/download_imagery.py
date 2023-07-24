@@ -1,15 +1,23 @@
 from landsatxplore.api import API
 from landsatxplore.earthexplorer import EarthExplorer 
-import json, os, tarfile
-from shapely.geometry import Polygon
+import json
+import os
+import tarfile
+from shapely.geometry import Polygon, Point
 import geopandas as gpd
 from scripts.credential import username_landsat, password_landsat, username_sentinel, password_sentinel
 from sentinelsat.sentinel import SentinelAPI
+from datetime import datetime
+import rasterio as rio
+from rasterio import mask, plot
+import matplotlib.pyplot as plt
+import zipfile
+import pandas as pd
 
 
 class DownloadImagery: 
 
-    def search_landast(self, lat, long, start_date, end_date, dataset='landsat_tm_c2_l2', max_cloud_cover=15):
+    def search_landast(lat, long, start_date, end_date, dataset='landsat_tm_c2_l2', max_cloud_cover=15):
 
         """Returns list of satellite imagery and dates from Earth Explorer.
 
@@ -40,19 +48,21 @@ class DownloadImagery:
         found_scenes = len(scenes)
         print(f"{found_scenes} scenes found.")
 
-        # Process the result
-        for scene in self.scenes:
-            print(scene['acquisition_date'].strftime('%Y-%m-%d'), ' | ID:', scene['entity_id'])
+        # Lista para armazenar os GeoDataFrames
+        geo_dataframes = []
 
-            # Write scene footprints to disk
-            fname = f"./geojson/{scene['landsat_product_id']}.geojson"
-            with open(fname, "w") as f:
-                json.dump(scene['spatial_coverage'].__geo_interface__, f)
+        for data_entry in scenes:
+            # Criar o GeoDataFrame usando os dados do JSON
+            gdf = gpd.GeoDataFrame([data_entry], geometry=[data_entry['spatial_coverage']])
 
-        api.logout()
-        return found_scenes
+            # Adicionar o GeoDataFrame à lista
+            geo_dataframes.append(gdf)
 
-    def download_landsat(self, output_dir, id):
+        merged_gdf = gpd.GeoDataFrame(pd.concat(geo_dataframes, ignore_index=True))
+
+        return merged_gdf
+
+    def download_landsat(username, password, output_dir, id):
 
         """Downloads the first image from list generated in search_imagery
 
@@ -61,22 +71,11 @@ class DownloadImagery:
 
         """
 
-        ee = EarthExplorer(self.api_username, self.api_password)
+        ee = EarthExplorer(username, password)
 
-        if not id:
-            for scene in self.scenes:
-                try:
-                    ee.download(scene['entity_id'], output_dir=output_dir)
-                except:
-                    pass
-                ee.logout()
-
-            path = os.path.join(os.getcwd(), output_dir)
-        
-        else:
-            ee.download(id, output_dir = output_dir)
-            ee.logou()
-            path = os.path.join(os.getcwd(), output_dir)
+        ee.download(id, output_dir = output_dir)
+        ee.logout()
+        path = os.path.join(os.getcwd(), output_dir)
 
         # Removing files that are not the zipped satellite image.
         print('Removing old satellite images...')
@@ -96,13 +95,7 @@ class DownloadImagery:
                     tar.close()
                     os.remove(landsat)
 
-        #final report
-        print('----------------QUICK REPORT---------------')
-        print(f"{scene['entity_id']} scenes downloaded.")
-        print(f"Cloud cover: {scene['scene_cloud_cover']} \nLand Cloud cover {scene['land_cloud_cover']}")
-        print(f"More information in the {scene['entity_id']}_metadata.json")
-
-    def download_sentinel(username, password, boundary, start_date, end_date, max_cloud_cover = 15):
+    def search_sentinel(username, password, boundary, start_date, end_date, max_cloud_cover = 15):
         
         geom = boundary['geometry'].iloc[0]
 
@@ -126,6 +119,53 @@ class DownloadImagery:
         gdf_sorted = gdf_sorted[gdf_sorted['contains']==True]
 
         return gdf_sorted
+    
+    def download_sentinel(username, password, gdf, idx, bound_crs):
+
+        api = SentinelAPI(username,
+                        password,
+                        'https://scihub.copernicus.eu/dhus')
+
+        api.download(gdf.index[idx])
+        meta = api.download(gdf.index[idx])
+        folder = meta['title']
+
+        with zipfile.ZipFile(f'{folder}.zip', 'r') as zip_ref:
+            zip_ref.extractall('')
+
+        folder = folder + '.SAFE'
+
+        path = folder,os.listdir(os.path.join(folder, 'GRANULE'))[-1]
+        img_dir = f'{path}/GRANULE/{path}/IMG_DATA/R10m'
+        raw_img = sorted(os.listdir(img_dir))[-2]
+        img_path = os.path.join(img_dir, raw_img)
+
+        check = rio.open(f'{img_path}')
+        print(check.crs)
+
+        with rio.open(f'{img_path}') as src:
+            out_image, out_transform = mask(src, bound_crs.geometry, crop = True)
+            out_meta = src.meta.copy()
+            out_meta.update({"driver": "GTiff",
+                 "height": out_image.shape[1],
+                 "width": out_image.shape[2],
+                 "transform": out_transform})
+            
+        # write cropped image
+        name = name
+
+        formatted_time = datetime.now().strftime("%y%m%d%H%M%S")
+        filename = '{}_{}.png'.format(formatted_time,name)
+        #filenames.append(filename)
+        with rio.open(filename, "w", **out_meta) as final:
+            final.write(out_image)
+
+        # plot cropped image
+        src = rio.open(filename)
+        fig = plt.figure(figsize=(30,30))
+        plt.title('Final Image')
+        plot.show(src, adjust='linear')
+
 
     def create_square_bbox(geometry):
         #from shapely.geometry import Polygon
