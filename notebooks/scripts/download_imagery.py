@@ -128,44 +128,28 @@ class DownloadImagery:
 
         api.download(gdf.index[idx])
         meta = api.download(gdf.index[idx])
-        folder = meta['title']
+        folder_path_title = meta['title']
 
-        with zipfile.ZipFile(f'{folder}.zip', 'r') as zip_ref:
-            zip_ref.extractall('')
+        folder_path = os.path.join(os.getcwd(), '/download',f'/{folder_path_title}')
+        output_dir = os.path.join(folder_path, '/extracted')
+        
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path) 
 
-        folder = folder + '.SAFE'
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
 
-        path = folder,os.listdir(os.path.join(folder, 'GRANULE'))[-1]
-        img_dir = f'{path}/GRANULE/{path}/IMG_DATA/R10m'
-        raw_img = sorted(os.listdir(img_dir))[-2]
-        img_path = os.path.join(img_dir, raw_img)
-
-        check = rio.open(f'{img_path}')
-        print(check.crs)
-
-        with rio.open(f'{img_path}') as src:
-            out_image, out_transform = mask(src, bound_crs.geometry, crop = True)
-            out_meta = src.meta.copy()
-            out_meta.update({"driver": "GTiff",
-                 "height": out_image.shape[1],
-                 "width": out_image.shape[2],
-                 "transform": out_transform})
-            
-        # write cropped image
-        name = name
-
-        formatted_time = datetime.now().strftime("%y%m%d%H%M%S")
-        filename = '{}_{}.png'.format(formatted_time,name)
-        #filenames.append(filename)
-        with rio.open(filename, "w", **out_meta) as final:
-            final.write(out_image)
-
-        # plot cropped image
-        src = rio.open(filename)
-        fig = plt.figure(figsize=(30,30))
-        plt.title('Final Image')
-        plot.show(src, adjust='linear')
-
+        # Unzipping all satellite images from the tar folder.
+        print('Unzipping images')
+        for root, dirs, files in os.walk(folder_path):
+            for file in files:
+                if file.endswith('.zip'):
+                    sentinel = os.path.join(folder_path, file)
+                    zip = zipfile.open(sentinel)
+                    zip.extractall(output_dir)
+                    zip.close()
+                    os.remove(sentinel)
+                    
 
     def create_square_bbox(geometry):
         #from shapely.geometry import Polygon
