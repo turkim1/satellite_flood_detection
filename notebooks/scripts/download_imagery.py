@@ -2,6 +2,8 @@ from landsatxplore.api import API
 from landsatxplore.earthexplorer import EarthExplorer 
 import json
 import os
+import glob
+import numpy as np
 import tarfile
 from shapely.geometry import Polygon, Point
 import geopandas as gpd
@@ -19,16 +21,19 @@ class DownloadImagery:
 
     def search_landast(lat, long, start_date, end_date, dataset='landsat_tm_c2_l2', max_cloud_cover=15):
 
-        """Returns list of satellite imagery and dates from Earth Explorer.
+        """
+        Returns a list of satellite imagery and dates from Earth Explorer.
 
         Arguments:
             lat {float} -- Latitude value
             long {float} -- Longitude value
-            start_date {datetime} -- Start date for the API start searching Eg.: 1985-01-01
-            end_date {datetime} -- End date for the API start searching Eg.: 1985-01-01
+            start_date {datetime} -- Start date for the API start searching. Eg.: 1985-01-01
+            end_date {datetime} -- End date for the API start searching. Eg.: 1985-01-01
             dataset {str} -- Satellite dataset of your choice. Default is landsat_tm_c2_l2
             max_cloud_cover {int} -- Percentage of desired clouds in the scene. Default is 15%
 
+        Returns:
+            GeoDataFrame -- A GeoDataFrame containing information about the found scenes.
         """
 
 
@@ -64,10 +69,14 @@ class DownloadImagery:
 
     def download_landsat(username, password, output_dir, id):
 
-        """Downloads the first image from list generated in search_imagery
+        """
+        Downloads the first image from the list generated in the search_landast function.
 
         Arguments:
-            output_dir {str} -- Path to folder that will save the file.
+            username {str} -- EarthExplorer username.
+            password {str} -- EarthExplorer password.
+            output_dir {str} -- Path to the folder where the file will be saved.
+            id {str} -- ID of the satellite image to be downloaded.
 
         """
 
@@ -96,6 +105,23 @@ class DownloadImagery:
                     os.remove(landsat)
 
     def search_sentinel(username, password, boundary, start_date, end_date, max_cloud_cover = 15):
+
+        """
+        Searches for Sentinel satellite imagery within a specified boundary.
+
+        Arguments:
+            username {str} -- Sentinel Hub username.
+            password {str} -- Sentinel Hub password.
+            boundary {GeoDataFrame} -- GeoDataFrame representing the boundary for the search area.
+            start_date {datetime} -- Start date for the search.
+            end_date {datetime} -- End date for the search.
+            max_cloud_cover {int} -- Maximum cloud cover percentage. Default is 15%.
+
+        Returns:
+            GeoDataFrame -- A GeoDataFrame containing information about the found Sentinel scenes.
+
+        """
+
         
         geom = boundary['geometry'].iloc[0]
 
@@ -121,53 +147,51 @@ class DownloadImagery:
         return gdf_sorted
     
     def download_sentinel(username, password, gdf, idx, bound_crs):
+        """
+            Downloads a Sentinel satellite image from the provided GeoDataFrame.
 
-        api = SentinelAPI(username,
-                        password,
-                        'https://scihub.copernicus.eu/dhus')
+            Arguments:
+                username {str} -- Sentinel Hub username.
+                password {str} -- Sentinel Hub password.
+                gdf {GeoDataFrame} -- GeoDataFrame containing information about the Sentinel scenes.
+                idx {int} -- Index of the scene to be downloaded.
+                bound_crs {str} -- Coordinate reference system (CRS) for the boundary.
 
-        api.download(gdf.index[idx])
+            """
+        api = SentinelAPI(username, password, 'https://scihub.copernicus.eu/dhus')
         meta = api.download(gdf.index[idx])
-        folder = meta['title']
+        #folder_path_title = meta['title']
 
-        with zipfile.ZipFile(f'{folder}.zip', 'r') as zip_ref:
-            zip_ref.extractall('')
+        folder_path = os.getcwd()
+        output_dir = os.path.join(folder_path, 'extracted')
 
-        folder = folder + '.SAFE'
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
 
-        path = folder,os.listdir(os.path.join(folder, 'GRANULE'))[-1]
-        img_dir = f'{path}/GRANULE/{path}/IMG_DATA/R10m'
-        raw_img = sorted(os.listdir(img_dir))[-2]
-        img_path = os.path.join(img_dir, raw_img)
-
-        check = rio.open(f'{img_path}')
-        print(check.crs)
-
-        with rio.open(f'{img_path}') as src:
-            out_image, out_transform = mask(src, bound_crs.geometry, crop = True)
-            out_meta = src.meta.copy()
-            out_meta.update({"driver": "GTiff",
-                 "height": out_image.shape[1],
-                 "width": out_image.shape[2],
-                 "transform": out_transform})
-            
-        # write cropped image
-        name = name
-
-        formatted_time = datetime.now().strftime("%y%m%d%H%M%S")
-        filename = '{}_{}.png'.format(formatted_time,name)
-        #filenames.append(filename)
-        with rio.open(filename, "w", **out_meta) as final:
-            final.write(out_image)
-
-        # plot cropped image
-        src = rio.open(filename)
-        fig = plt.figure(figsize=(30,30))
-        plt.title('Final Image')
-        plot.show(src, adjust='linear')
-
+        # Unzipping the satellite image from the zip folder.
+        print('Unzipping images')
+        for root, dirs, files in os.walk(folder_path):
+            for file in files:
+                if file.endswith('.zip'):
+                    sentinel_zip = os.path.join(folder_path, file)
+                    with zipfile.ZipFile(sentinel_zip, 'r') as zip_ref:
+                        zip_ref.extractall(output_dir)
+                    os.remove(sentinel_zip)
+        print('Unzipping completed.')
+  
 
     def create_square_bbox(geometry):
+        """
+        Creates a square bounding box around the given geometry.
+
+        Arguments:
+            geometry {GeoSeries} -- GeoSeries representing the geometry.
+
+        Returns:
+            GeoDataFrame -- A GeoDataFrame containing the square bounding box.
+
+        """
+
         #from shapely.geometry import Polygon
         # Get the bounds of the geometry column
         bounds = geometry.bounds
@@ -200,11 +224,73 @@ class DownloadImagery:
 
     def normalize(band):
 
-        """Normalized raster bands
+        """
+        Normalizes a raster band.
 
         Arguments:
-            band {numpy array}
+            band {numpy array} -- The raster band to be normalized.
+
+        Returns:
+            numpy array -- The normalized raster band.
+
         """
 
         band_min, band_max = (band.min(), band.max())
         return ((band - band_min)/((band_max - band_min)))
+    
+    def stakingBands(satellite, bands_path, outpath, name_output):
+        """
+        Stakes multiple bands of a satellite image into a single image.
+
+        Parameters:
+        bands_path (str): The path to the directory containing the bands.
+        outpath (str): The path to the directory where the output image will be saved.
+
+        Returns:
+        None
+        """
+        # Reading and staking
+
+        if satellite == 'landsat':
+            full_bands_path = os.path.join(bands_path, '_*B[1:2:3:4:5:6:7].tif')
+            multi_bands = glob.glob(full_bands_path)
+            multi_bands.sort()
+
+            img_list = []
+
+            for img in multi_bands:
+                with rio.open(img, 'r') as img_file:
+                    img_list.append(img_file.read(1))
+                    out_meta = img_file.profile
+                    img_file.close()
+
+            arr_st = np.stack(img_list)
+
+            # Updating metadata
+            out_meta.update({"count": len(multi_bands)})
+
+            # Saving multi stack to disk
+            with rio.open(os.path.join(outpath, f'{name_output}.tif'), 'w', **out_meta) as src:
+                src.write(arr_st)
+        
+        if satellite == 'sentinel':
+            full_bands_path = os.path.join(bands_path, '_*B0[2:3:4]_10m.jp2')
+            multi_bands = glob.glob(full_bands_path)
+            multi_bands.sort()
+
+            img_list = []
+
+            for img in multi_bands:
+                with rio.open(img, 'r') as img_file:
+                    img_list.append(img_file.read(1))
+                    out_meta = img_file.profile
+                    img_file.close()
+
+            arr_st = np.stack(img_list)
+
+            # Updating metadata
+            out_meta.update({"count": len(multi_bands)})
+
+            # Saving multi stack to disk
+            with rio.open(os.path.join(outpath, f'{name_output}.tif'), 'w', **out_meta) as src:
+                src.write(arr_st)
